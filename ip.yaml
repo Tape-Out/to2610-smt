@@ -1,0 +1,107 @@
+name: to2610-smt
+version: 0.1.0
+spec: '0.1'
+kind: ip
+lang: verilog
+identity:
+  slug: to2610-smt
+  display_name: One core, two hardware threads
+  summary: 'A hyper-threaded chip for the ECOS 2610 shuttle: one KianV core with two sets of architectural state, switching thread between instructions, which software sees as the two harts of to2610-smp.'
+  category: soc
+  subcategories:
+  - riscv
+  ip_family: kianriscv
+  integration_profile: []
+  maturity: simulated
+contract:
+  version: 1
+  ctrl:
+    shape: none
+    aw: 32
+    dw: 32
+deps:
+  gf180mcu-kianv-rv32ima-sv32: ^0.1
+  to2610-kvc: ^0.1
+  to2610-amp: ^0.1
+  to2610-smp: ^0.1
+emit:
+- kind: foreign
+  lang: sv
+  top: chip_core
+  # 源码树是拼出来的：to2610-amp 拼好的那一份套上本仓的补丁，仲裁换成管预留的那一个
+  setup: src
+  rtl:
+  - build/src/chip_core.sv
+  - { glob: "build/src/*.v" }
+  - build/src/sdram/mt48lc16m16a2_ctrl.v
+  - { glob: "build/src/kianv_harris_edition/*.v" }
+  includes:
+  - build/src
+  - build/src/kianv_harris_edition
+  # 与 to2610-kvc 交付的那一颗同一组取值
+  defines:
+    SYSTEM_CLK: 50000000
+    NUM_ENTRIES_ITLB: 16
+    NUM_ENTRIES_DTLB: 16
+    TRP_NS: 15
+    TRCD_NS: 15
+    TRFC_NS: 66
+    TWR_NS: 15
+    CAS: 2
+    TREFI_NS: 7800
+    BYPASS_CACHES: 1
+    SYNTHESIS: 1
+  clock:
+    port: clk
+  reset:
+    port: rst_n
+    active: low
+    sync: false
+  ports:
+  # 引脚与 to2610-kvc 逐位相同：上游并成的那条 54 位双向焊盘总线
+  - endpoint: pads
+    kind: physical
+    type: KianvPads
+    map:
+      i: bidir_in
+      o: bidir_out
+      oe: bidir_oe
+      cs: bidir_cs
+      sl: bidir_sl
+      ie: bidir_ie
+      pu: bidir_pu
+      pd: bidir_pd
+  limits:
+  - 两个线程都在忙时一人一条指令，各自比单核慢一半上下；一个睡着时另一个接近单核的速度
+  - 外部中断只进 0 号线程；1 号线程有自己的 CLINT（核间中断与计时器）与一根门铃中断
+  - TLB 每个线程 16 项
+  - 预留按字记，一个线程一条；取页表的读也会改写它，随后那一次真正的读再盖回来
+  - 缓存旁路、SDRAM 固定 32 MiB、主频固定 50 MHz、没有 JTAG，同 to2610-kvc
+asic:
+  top: to2610_smt
+  frame: mpc
+  mhz: 50
+  flow: syn_sta
+  # 引脚与 to2610-kvc 逐位相同，原样占 payload 的 0 到 53 位：kvc、amp、smp、smt 四颗用同一块底板
+  pads:
+  - { in: bidir_in, out: bidir_out, oe: bidir_oe }
+  unused: [bidir_cs, bidir_sl, bidir_ie, bidir_pu, bidir_pd]
+tasks:
+  src:
+    desc: 拼源码树：to2610-smp 拼好的那一份套上 patch/smt.patch，两个核加仲裁换成一个核、两个硬件线程
+    run: bash htest/setup.sh {{dep.gf180mcu-kianv-rv32ima-sv32}} {{dep.to2610-amp}} {{dep.to2610-smp}}
+  chip:
+    desc: 出流片的 .v，在它上面跑 to2610-kvc 的各段、两个线程各一遍 riscv-tests、两个线程一起的那一段
+    run: bash htest/chip.sh {{out}} {{dep.gf180mcu-kianv-rv32ima-sv32}} {{dep.to2610-kvc}}
+    timeout: 14400
+  design-faults:
+    desc: 把每个线程一份的某一样改成共用，或把轮转、预留里的一条规矩去掉，重出 .v：管这一处的那一句要红，十二处
+    run: bash htest/design-faults.sh {{out}} {{dep.gf180mcu-kianv-rv32ima-sv32}} {{dep.to2610-kvc}}
+    timeout: 7200
+test:
+  upstream:
+  - { name: chip, task: chip, timeout: 14400 }
+  - { name: design-faults, task: design-faults, timeout: 7200 }
+targets:
+  foreign:
+    driver: foreign

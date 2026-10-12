@@ -1,0 +1,26 @@
+reject BAD
+reject trap 
+expect sum ok, jump
+expect to2610 smt
+expect ident ok 534d5431
+expect hart ok 00000000
+expect sc same ok 00000006
+expect sc alone ok 00000006
+expect sc other ok 00030006
+expect hart b ok 00000101
+expect race ok 00000000
+expect amo ok 00000190
+expect spin ok 00000190
+expect lrsc ok 00000190
+expect vm ok 00000000
+expect kill ok 00000077
+expect keep ok 00000078
+expect apart ok 00000079
+expect ipi ok 00010001
+expect tick ok 00000001
+expect nap ok
+expect wake ok
+expect poll ok 00000000
+expect stop ok 00000000
+expect again ok 00000101
+expect done
