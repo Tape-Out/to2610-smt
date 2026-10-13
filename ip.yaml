@@ -91,12 +91,16 @@ tasks:
     desc: 拼源码树：to2610-smp 拼好的那一份套上 patch/smt.patch，两个核加仲裁换成一个核、两个硬件线程
     run: bash htest/setup.sh {{dep.gf180mcu-kianv-rv32ima-sv32}} {{dep.to2610-amp}} {{dep.to2610-smp}}
   chip:
-    desc: 出流片的 .v，在它上面跑 to2610-kvc 的各段（裸机、riscv-tests、引导、FreeRTOS）、两个线程各一遍 riscv-tests、两个线程一起的那一段；Linux 镜像先过 QEMU，起到 shell 的那一段交给接力
-    run: bash htest/chip.sh {{out}} {{dep.gf180mcu-kianv-rv32ima-sv32}} {{dep.to2610-kvc}}
+    desc: 出流片的 .v，在它上面跑 to2610-kvc 的各段（裸机、riscv-tests、引导、FreeRTOS）、两个线程各一遍 riscv-tests、两个线程一起的那一段；两份 Linux 镜像先过 QEMU，在这一颗上起到 shell 的两遍交给接力
+    run: bash htest/chip.sh {{out}} {{dep.gf180mcu-kianv-rv32ima-sv32}} {{dep.to2610-kvc}} {{dep.to2610-smp}}
     timeout: 14400
   linux-boot:
-    desc: Linux 从 Flash 起到 shell，接力跑：每一棒从前一棒的断点接着跑满时限，走完了后面的棒直接收工
-    run: bash htest/linux-boot.sh {{out}} {{dep.to2610-kvc}}
+    desc: to2610-kvc 的单核 Linux 从 Flash 起到 shell（1 号线程不放开），接力跑：每一棒从前一棒的断点接着跑满时限，走完了后面的棒直接收工
+    run: bash {{dep.to2610-smp}}/htest/linux-boot.sh {{out}} {{dep.to2610-kvc}} linux build/relay
+    timeout: 19800
+  linux-smp:
+    desc: to2610-smp 的两核 SMP Linux 在两个线程上从 Flash 起到 shell 并跑并发那几句，接力跑
+    run: bash {{dep.to2610-smp}}/htest/linux-boot.sh {{out}} {{dep.to2610-kvc}} smp build/relay
     timeout: 19800
   design-faults:
     desc: 把每个线程一份的某一样改成共用，或把轮转、预留里的一条规矩去掉，重出 .v：管这一处的那一句要红，十二处

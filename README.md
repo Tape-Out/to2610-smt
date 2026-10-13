@@ -45,7 +45,8 @@ $ ran asic to2610-smt                     # to2610_smt.v, ecc at 50 MHz, report.
 | Test | What |
 |:--:|:--:|
 | `hello`, `periph`, `isa`, `arch-test`, `boot` | the tests of `to2610-kvc` unchanged: with hart 1 held, this chip is that one |
-| `rtos`, `image`, `linux` | FreeRTOS and the Linux image of `to2610-kvc` on hart 0: the image first boots in QEMU, then from flash on this chip to a shell, relayed over CI jobs |
+| `rtos`, `image`, `linux` | FreeRTOS and the single-core Linux image of `to2610-kvc` on hart 0: the image first boots in QEMU, then from flash on this chip to a shell, relayed over CI jobs |
+| `image-smp`, `linux-smp` | the two-hart Linux image of `to2610-smp` unchanged: the firmware releases hart 1 at cold boot and the SMP kernel brings it up; both CPUs in `/proc/cpuinfo`, `apptest`, two busy loops on two CPUs, IPIs counted on both; a second relay |
 | `threads` | riscv-tests on each thread, 238 runs, in three rotations: hart 0 under test with hart 1 spinning, hart 1 under test with hart 0 asleep, hart 1 under test with hart 0 rewriting its own registers, CSRs and memory |
 | `smt` | one program on both harts: a shared counter that must lose updates without atomics and must not with `amoadd`, a spinlock or LR/SC; a page table for each thread, the same virtual address on different physical pages; reservations across threads; interrupts both ways; sleep, wake-up and polling through WFI; hart 1 taken back and released |
 
