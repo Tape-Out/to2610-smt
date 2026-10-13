@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # 整片测试，全部跑在 ran asic 出的那份 .v 上。测试台、片外模型来自黑盒仓，引导程序与测试台的引脚包装来自 to2610-kvc。
 #   hello、periph、isa、arch-test、boot  to2610-kvc 的五段原样跑：1 号线程没放开时，这一颗与单核的那一颗一样
+#   rtos   to2610-kvc 的 FreeRTOS 冒烟，0 号线程
+#   image  to2610-kvc 的 Linux 镜像先在 QEMU 上起到 shell：镜像坏了一分钟就知道
+#   linux  同一份镜像在这一颗上从 Flash 起到 shell（0 号线程）。仿真要几个小时：本机带 SMT_LINUX=1 一口气跑；
+#          不带时把仿真器、镜像与脚本留在 build/linux-run，流水线上由后面几棒（htest/linux-boot.sh）接力跑完
 #   threads  riscv-tests 在两个线程上各跑，三种轮法（htest/isa.sh）
 #   smt    两个线程跑同一份程序：编号、四种加法、预留跨线程、核间中断、1 号的计时器、睡与醒、收回与再放开
 # 用法：chip.sh <输出目录> <gf180mcu-kianv-rv32ima-sv32 仓> <to2610-kvc 仓>。
@@ -63,6 +67,49 @@ make -s -C htest/smt O="$O/smt"
 python3 "$L/sw/pack.py" "$O/boot/boot.bin" "$O/smt/smt.bin" "$O/smt.flash"
 run smt "两个线程跑同一份程序：编号各是 0 与 1；各加两百次同一个数，直接加会丢，amoadd、amoswap 自旋锁、LR 与 SC 三种一个不丢；各开各的页表，同一个虚地址各落各的物理页；1 号写了预留的那个字 SC 写不成，写的是别的字、或只是预留了别的字，SC 照样写成；核间中断两个方向、1 号自己的计时器中断；1 号睡着时 0 号提速一倍半以上，中断一百微秒里叫得醒，拿 WFI 轮询内存也等得到；收回 1 号它就停，再放开它从头来" \
   +flash="$O/smt.flash@0" +script=htest/smt/script +max=60000000
+
+make -s -C "$L/htest/rtos" O="$O/rtos"
+python3 "$L/sw/pack.py" "$O/boot/boot.bin" "$O/rtos/rtos.bin" "$O/rtos.flash"
+run rtos "to2610-kvc 的 FreeRTOS 冒烟在 0 号线程上：三个任务、队列、互斥量、节拍与抢占" \
+  +flash="$O/rtos.flash@0" +script="$L/htest/rtos/script" +max=20000000
+
+# Linux 镜像就是 to2610-kvc 的那一份：它在本机编过就用编出来的，不然照它的 image.pin 去发布页取
+I=${LINUX_IMAGE:-$L/build/linux/fw_payload.bin}
+if [ ! -s "$I" ] && [ -s "$L/sw/linux/image.pin" ]; then
+  I=$O/fw_payload.bin
+  read -r url sum < "$L/sw/linux/image.pin"
+  if curl -fsSL --retry 5 -o "$I.part" "$url" && echo "$sum  $I.part" | sha256sum -c - > /dev/null; then
+    mv "$I.part" "$I"
+  else
+    rm -f "$I.part"
+    echo "取不到镜像 $url，或摘要不是 $sum"
+  fi
+fi
+if [ -s "$I" ]; then
+  t0=$SECONDS
+  rc=0
+  python3 "$L/htest/qemu.py" "$I" "$L/htest/image.script" "$O/qemu" > "$O/image.log" 2>&1 || rc=$?
+  tail -n 3 "$O/image.log"
+  res+=("image=$rc:$((SECONDS - t0)):载荷里的内核带着根文件系统在 QEMU 的 virt 机器上起到 shell；只验软件，拦坏镜像")
+  python3 "$L/sw/pack.py" "$O/boot/boot.bin" "$I" "$O/linux.flash"
+  if [ $rc != 0 ]; then
+    res+=("linux=1:0:镜像没过 QEMU 那一关，没跑")
+  elif [ "${SMT_LINUX:-}" != 1 ]; then
+    # 起一遍要几个小时，托管机的一个作业连着前面各段放不下。这里不记这一段，结果由接力的最后一棒报
+    rm -rf build/linux-run
+    mkdir -p build/linux-run
+    cp "$O/sim/Vtb" "$O/linux.flash" build/linux-run/
+    sed -E 's#^save build/(ckpt/)?linux\.ckpt#save build/linux-run/linux.ckpt#' "$L/htest/linux.script" > build/linux-run/linux.script
+    echo "linux 这一段交给后面的作业（htest/linux-boot.sh）"
+  else
+    # 发字节的间隔 60 万拍：见 to2610-kvc 的 chip.sh
+    run linux "to2610-kvc 的镜像原样在这一颗上从 Flash 起到 shell，跑它的那组命令：1 号线程没放开，0 号线程上起的是一份单核的 Linux" \
+      +flash="$O/linux.flash@0" +script="$L/htest/linux.script" +pace=600000 +max="${LINUX_MAX:-9000000000}" +beat=1000000000
+  fi
+else
+  echo "没有 Linux 镜像 $I"
+  res+=("image=1:0:没有镜像，没跑" "linux=1:0:没有镜像，没跑")
+fi
 
 python3 "$L/htest/junit.py" "$O/results.xml" "${res[@]}"
 printf '%s\n' "${res[@]}"
