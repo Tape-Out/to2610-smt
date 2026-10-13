@@ -9,7 +9,7 @@ _start:
     sw t1, 0(t0)
     li t0, 0x40040000
     lw t2, 0(t0)
-    li t3, 0x534d5031
+    li t3, 0x534d5431
     li t1, 0x4d
     beq t2, t3, 1f
     li t1, 0x58
