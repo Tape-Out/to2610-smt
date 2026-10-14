@@ -8,6 +8,7 @@
  *   两个线程跑的是同一段循环，步子一样就会一直错开、谁也碰不上谁，所以每圈垫几条指令，两个线程垫的不一样
  *   预留跨线程作废：0 号线程 LR 之后1 号线程写了同一个字，SC 写不成；写的是别的字，SC 照样写成
  *   核间中断两个方向各一次，1 号线程自己的计时器中断一次
+ *   1 号线程读到的 time 与 CLINT 的 mtime 是同一个数，夹在前后两次读 mtime 之间：放开之后、收回再放开之后各核一次
  *   收回1 号线程它就停，再放开它从头来
  */
 #include <stdint.h>
@@ -28,12 +29,13 @@
 
 #define N 200
 
-enum { PLAIN = 1, AMO, SPIN, LRSC, VM, POKE_CELL, POKE_OTHER, LR_OTHER, IPI, TICK, NAP, POLL };
+enum { PLAIN = 1, AMO, SPIN, LRSC, VM, POKE_CELL, POKE_OTHER, LR_OTHER, IPI, TICK, NAP, POLL, TIME };
 
 static volatile uint32_t cmd, ack, hart_b, beat, oops_b, napping, go;
 static volatile uint32_t plain, added, lock, locked, cond;
 static volatile uint32_t retry[2], waits[2], soft[2], tick_b;
 static volatile uint32_t cell, other;
+static volatile uint32_t time_ok, time_d;
 /* 两个线程各一张根页表；虚地址 0x4000_0000 那一兆页，0 号映到 0x8080_0000，1 号映到 0x80C0_0000 */
 static uint32_t pt[2][1024] __attribute__((aligned(4096)));
 static volatile uint32_t vmbad[2];
@@ -206,6 +208,14 @@ void main_b(void) {
         REG(CLINT_B + MTIMECMP) = REG(CLINT_B + MTIME) + 200;
         REG(CLINT_B + MTIMECMP + 4) = REG(CLINT_B + MTIME + 4);
         break;
+      case TIME: {
+        uint32_t t0 = REG(CLINT_A + MTIME);
+        uint32_t tb = CSR_R(time);
+        uint32_t t1 = REG(CLINT_A + MTIME);
+        time_d = tb - t0;
+        time_ok = tb - t0 <= t1 - t0;
+        break;
+      }
       case NAP: {
         /* 睡到下一个核间中断来 */
         uint32_t s = soft[1];
@@ -332,6 +342,8 @@ int main(void) {
   verdict("ipi", bad || REG(CLINT_A + MSIP) != 0 || REG(CLINT_B + MSIP) != 0, soft[1] << 16 | soft[0]);
   bad = ask(TICK) | UNTIL(tick_b == 1, 100);
   verdict("tick", bad, tick_b);
+  bad = ask(TIME);
+  verdict("time", bad || !time_ok, time_d);
 
   /* 两个线程共用一个核才有的两条。对面在忙时两边一人一条指令；对面睡着（WFI，没有开着又挂起的中断）时拍子都归这一边，
      同样的时间里转的圈数至少是一倍半。对面的中断一来就排回轮转，不必等「每跳过 63 次轮到一次」：一百微秒里要应到 */
@@ -369,6 +381,8 @@ int main(void) {
   REG(RUN) = 1;
   bad = UNTIL(hart_b != 0, 100) | ask(POKE_OTHER);
   verdict("again", bad || hart_b != 0x101, hart_b);
+  bad = ask(TIME);
+  verdict("time again", bad || !time_ok, time_d);
   say("done\n");
   for (;;) {}
 }

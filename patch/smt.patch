@@ -73,7 +73,7 @@
        .mul_ext_ready(mul_ext_ready)
 --- a/src/kianv_harris_edition/csr_exception_handler.v
 +++ b/src/kianv_harris_edition/csr_exception_handler.v
-@@ -59,7 +59,8 @@
+@@ -61,7 +61,8 @@
      output wire                      IRQ_TO_CPU_CTRL5,
      output wire                      IRQ_TO_CPU_CTRL7,
      output wire                      IRQ_TO_CPU_CTRL9,
@@ -83,7 +83,7 @@
  );
  
    wire [31:0] mie;
-@@ -70,6 +71,8 @@
+@@ -72,6 +73,8 @@
    wire [31:0] mcounteren;
    wire [31:0] stimecmp;
    wire [31:0] stimecmph;
@@ -91,15 +91,17 @@
 +  assign wake = |(mie & mip_current);
  
    csr_unit #(
-       .HART_ID(HART_ID)
+       .HART_ID (HART_ID),
 --- a/src/kianv_harris_edition/datapath_unit.v
 +++ b/src/kianv_harris_edition/datapath_unit.v
-@@ -23,10 +23,19 @@
+@@ -23,13 +23,20 @@
  `include "riscv_defines.vh"
  module datapath_unit #(
      parameter RESET_ADDR = 0,
+-    parameter HART_ID = 0,
+-    parameter EXT_TIME = 0
 +    parameter RESET_ADDR1 = 0,
-     parameter HART_ID = 0
++    parameter HART_ID = 0
  ) (
      input wire clk,
      input wire resetn,
@@ -112,9 +114,11 @@
 +    output wire [3:0] privilege_mode_t,
 +    output wire [1:0] tlb_flush_t,
      input wire [15:0] sysclk_mhz_q8_8,
+-    input wire [63:0] time_i,
  
      input  wire [`RESULT_WIDTH   -1:0] ResultSrc,
-@@ -88,10 +97,10 @@
+     input  wire [`ALU_CTRL_WIDTH -1:0] ALUControl,
+@@ -90,10 +97,10 @@
      input  wire        page_fault,
      input  wire        selectPC,
  
@@ -129,7 +133,7 @@
  
      output wire IRQ_TO_CPU_CTRL1,
      output wire IRQ_TO_CPU_CTRL3,
-@@ -113,9 +122,9 @@
+@@ -115,9 +122,9 @@
    register_file register_file_I (
        .clk(clk),
        .we (RegWrite),
@@ -142,7 +146,7 @@
        .rd1(Rd1),
        .rd2(Rd2),
        .wd (WD3)
-@@ -194,13 +203,23 @@
+@@ -196,13 +203,23 @@
        pc_or_exception_next
    );
  
@@ -169,7 +173,7 @@
  
    dff_kianV #(32, `NOP_INSTR) Instr_I (
        resetn,
-@@ -218,33 +237,51 @@
+@@ -220,33 +237,51 @@
        .q     (amo_buffer_addr_value)
    );
  
@@ -241,16 +245,18 @@
  
    dff_kianV #(32) ALUOut_I (
        resetn,
-@@ -405,46 +442,74 @@
+@@ -407,48 +442,76 @@
        pc_on_exception
    );
  
 -  csr_exception_handler #(
--      .HART_ID(HART_ID)
+-      .HART_ID (HART_ID),
+-      .EXT_TIME(EXT_TIME)
 -  ) csr_exception_handler_I (
 -      .clk              (clk),
 -      .resetn           (resetn),
 -      .sysclk_mhz_q8_8  (sysclk_mhz_q8_8),
+-      .time_i           (time_i),
 -      .incr_inst_retired(incr_inst_retired),
 -      .CSRAddr          (CSRAddr),
 -      .CSRop            (CSRop),
@@ -287,7 +293,7 @@
 -      .IRQ_TO_CPU_CTRL11(IRQ_TO_CPU_CTRL11)
 -  );
 +  // CSR、特权级与中断的判定每个线程一份：写与事件只给现在跑的那个线程，读出来的按线程选。
-+  // 1 号线程没放开时它的那一份按在复位里
++  // 1 号线程没放开时它的那一份按在复位里；它的 time 取 0 号的计数，自己的那一份随收放复位，两个线程的 time 要一样
 +  wire [ 63:0] csr_rdata_t, exception_next_pc_t;
 +  wire [127:0] timer_counter_t;
 +  wire [  1:0] exception_select_t, csr_access_fault_t;
@@ -296,11 +302,13 @@
 +    for (ti = 0; ti < 2; ti = ti + 1) begin : g_csr
 +      wire mine = tid == ti;
 +      csr_exception_handler #(
-+          .HART_ID(ti)
++          .HART_ID (ti),
++          .EXT_TIME(ti)
 +      ) csr_exception_handler_I (
 +          .clk              (clk),
 +          .resetn           (resetn && (ti == 0 || run1)),
 +          .sysclk_mhz_q8_8  (sysclk_mhz_q8_8),
++          .time_i           (ti == 0 ? 64'd0 : timer_counter_t[63:0]),
 +          .incr_inst_retired(incr_inst_retired && mine),
 +          .CSRAddr          (CSRAddr),
 +          .CSRop            (CSRop),
@@ -359,15 +367,24 @@
  endmodule
 --- a/src/kianv_harris_edition/kianv_harris_mc_edition.v
 +++ b/src/kianv_harris_edition/kianv_harris_mc_edition.v
-@@ -23,6 +23,7 @@
+@@ -23,15 +23,14 @@
  `include "riscv_defines.vh"
  module kianv_harris_mc_edition #(
      parameter RESET_ADDR = 0,
 +    parameter RESET_ADDR1 = 32'h8000_0000,
      parameter HART_ID = 0,
+-    parameter EXT_TIME = 0,
      parameter NUM_ENTRIES_ITLB = 64,
      parameter NUM_ENTRIES_DTLB = 64
-@@ -38,17 +39,15 @@
+ ) (
+     input  wire        clk,
+     input  wire        resetn,
+     input  wire [15:0] sysclk_mhz_q8_8,
+-    input  wire [63:0] time_i,
+     output wire        mem_valid,
+     input  wire        mem_ready,
+     output wire [ 3:0] mem_wstrb,
+@@ -40,17 +39,15 @@
      input  wire [31:0] mem_rdata,
      output wire [31:0] PC,
      input  wire        access_fault,
@@ -391,7 +408,7 @@
  );
  
    wire [                 31:0] Instr;
-@@ -139,6 +138,34 @@
+@@ -141,6 +138,34 @@
    wire [ 1:0] addr_align_bits;
  
    wire        stall;
@@ -426,7 +443,7 @@
  
    wire        mstatus_tvm = `GET_MSTATUS_TVM(mstatus);
    wire        mstatus_tw = `GET_MSTATUS_TW(mstatus);
-@@ -192,6 +219,7 @@
+@@ -194,6 +219,7 @@
        .lr_read          (lr_read),
        .sc_write         (sc_write),
        .sc_abort         (sc_abort),
@@ -434,12 +451,13 @@
  
        .mul_valid(mul_valid),
        .mul_ready(mul_ready),
-@@ -226,11 +254,19 @@
+@@ -228,14 +254,20 @@
    );
  
    datapath_unit #(
 -      .RESET_ADDR(RESET_ADDR),
--      .HART_ID   (HART_ID)
+-      .HART_ID   (HART_ID),
+-      .EXT_TIME  (EXT_TIME)
 +      .RESET_ADDR (RESET_ADDR),
 +      .RESET_ADDR1(RESET_ADDR1),
 +      .HART_ID    (HART_ID)
@@ -454,9 +472,11 @@
 +      .privilege_mode_t(privilege_mode_t),
 +      .tlb_flush_t     (tlb_flush_t),
        .sysclk_mhz_q8_8(sysclk_mhz_q8_8),
+-      .time_i         (time_i),
  
        .ResultSrc (ResultSrc),
-@@ -304,35 +340,103 @@
+       .ALUControl(ALUControl),
+@@ -308,35 +340,103 @@
        .IRQ_TO_CPU_CTRL11(IRQ_TO_CPU_CTRL11)
    );
  
@@ -627,7 +647,7 @@
    wire        amp_ready, amp_irq_a;
    wire [31:0] amp_rdata;
    wire [5:0] ctrl_state;
-@@ -576,99 +568,33 @@
+@@ -576,102 +568,33 @@
      else access_fault_ready <= hit_access_fault_valid;
    end
  
@@ -642,6 +662,7 @@
        .clk            (clk),
        .resetn         (resetn_soc),
        .sysclk_mhz_q8_8(sysclk_mhz_q8_8),
+-      .time_i         (64'd0),
 -      .mem_ready      (a_ready),
 -      .mem_valid      (a_valid),
 -      .mem_wstrb      (a_wstrb),
@@ -678,12 +699,14 @@
 -  kianv_harris_mc_edition #(
 -      .RESET_ADDR      (32'h8000_0000),
 -      .HART_ID         (1),
+-      .EXT_TIME        (1),
 -      .NUM_ENTRIES_ITLB(`NUM_ENTRIES_ITLB),
 -      .NUM_ENTRIES_DTLB(`NUM_ENTRIES_DTLB)
 -  ) kianv_B (
 -      .clk            (clk),
 -      .resetn         (resetn_soc && b_go),
 -      .sysclk_mhz_q8_8(sysclk_mhz_q8_8),
+-      .time_i         (timer_counter),
 -      .mem_ready      (b_ready),
 -      .mem_valid      (b_valid),
 -      .mem_wstrb      (b_wstrb),

@@ -48,12 +48,14 @@ CSR = [
 ]
 
 DATAPATH = [
-    ("module datapath_unit #(\n    parameter RESET_ADDR = 0,\n    parameter HART_ID = 0\n) (\n    input wire clk,\n    input wire resetn,\n",
+    ("module datapath_unit #(\n    parameter RESET_ADDR = 0,\n    parameter HART_ID = 0,\n    parameter EXT_TIME = 0\n) (\n    input wire clk,\n    input wire resetn,\n",
      "module datapath_unit #(\n    parameter RESET_ADDR = 0,\n    parameter RESET_ADDR1 = 0,\n    parameter HART_ID = 0\n) (\n"
      "    input wire clk,\n    input wire resetn,\n"
      "    // 现在跑的是哪个线程；1 号线程放开没有。带 _t 的是两个线程各自的那一份，给各自的地址转换用\n"
      "    input wire tid,\n    input wire run1,\n    output wire [1:0] wake,\n    output wire [63:0] satp_t,\n"
      "    output wire [63:0] mstatus_t,\n    output wire [3:0] privilege_mode_t,\n    output wire [1:0] tlb_flush_t,\n"),
+    # time 按线程接，不从外面进
+    ("    input wire [15:0] sysclk_mhz_q8_8,\n    input wire [63:0] time_i,\n", "    input wire [15:0] sysclk_mhz_q8_8,\n"),
     ("    input wire IRQ3,\n    input wire IRQ7,\n    input wire IRQ9,\n    input wire IRQ11,\n",
      "    input wire [1:0] IRQ3,\n    input wire [1:0] IRQ7,\n    input wire [1:0] IRQ9,\n    input wire [1:0] IRQ11,\n"),
     ("      .A1 (Rs1),\n      .A2 (Rs2),\n      .A3 (Rd),\n", "      .A1 ({tid, Rs1}),\n      .A2 ({tid, Rs2}),\n      .A3 ({tid, Rd}),\n"),
@@ -88,7 +90,7 @@ DATAPATH = [
 ]
 
 CSRS = """  // CSR、特权级与中断的判定每个线程一份：写与事件只给现在跑的那个线程，读出来的按线程选。
-  // 1 号线程没放开时它的那一份按在复位里
+  // 1 号线程没放开时它的那一份按在复位里；它的 time 取 0 号的计数，自己的那一份随收放复位，两个线程的 time 要一样
   wire [ 63:0] csr_rdata_t, exception_next_pc_t;
   wire [127:0] timer_counter_t;
   wire [  1:0] exception_select_t, csr_access_fault_t;
@@ -97,11 +99,13 @@ CSRS = """  // CSR、特权级与中断的判定每个线程一份：写与事�
     for (ti = 0; ti < 2; ti = ti + 1) begin : g_csr
       wire mine = tid == ti;
       csr_exception_handler #(
-          .HART_ID(ti)
+          .HART_ID (ti),
+          .EXT_TIME(ti)
       ) csr_exception_handler_I (
           .clk              (clk),
           .resetn           (resetn && (ti == 0 || run1)),
           .sysclk_mhz_q8_8  (sysclk_mhz_q8_8),
+          .time_i           (ti == 0 ? 64'd0 : timer_counter_t[63:0]),
           .incr_inst_retired(incr_inst_retired && mine),
           .CSRAddr          (CSRAddr),
           .CSRop            (CSRop),
@@ -294,8 +298,10 @@ endmodule
 """
 
 TOP = [
-    ("    parameter RESET_ADDR = 0,\n    parameter HART_ID = 0,\n",
+    ("    parameter RESET_ADDR = 0,\n    parameter HART_ID = 0,\n    parameter EXT_TIME = 0,\n",
      "    parameter RESET_ADDR = 0,\n    parameter RESET_ADDR1 = 32'h8000_0000,\n    parameter HART_ID = 0,\n"),
+    ("    input  wire [15:0] sysclk_mhz_q8_8,\n    input  wire [63:0] time_i,\n", "    input  wire [15:0] sysclk_mhz_q8_8,\n"),
+    ("      .sysclk_mhz_q8_8(sysclk_mhz_q8_8),\n      .time_i         (time_i),\n", "      .sysclk_mhz_q8_8(sysclk_mhz_q8_8),\n"),
     ("    input  wire        IRQ3,\n    input  wire        IRQ7,\n    input  wire        IRQ9,\n    input  wire        IRQ11,\n",
      "    input  wire [ 1:0] IRQ3,\n    input  wire [ 1:0] IRQ7,\n    input  wire [ 1:0] IRQ9,\n    input  wire [ 1:0] IRQ11,\n"),
     ("    output wire        icache_flush,\n    output wire        amo_lock,\n    output wire        lr_read,\n"
@@ -303,7 +309,7 @@ TOP = [
      "    output wire        icache_flush,\n    // 1 号线程放开没有；收着的时候只有 0 号线程在跑\n    input  wire        run1\n);\n"),
     ("  wire        stall;\n", SCHED),
     ("      .sc_abort         (sc_abort),\n", "      .sc_abort         (sc_abort),\n      .next_instr       (next_instr),\n"),
-    ("      .RESET_ADDR(RESET_ADDR),\n      .HART_ID   (HART_ID)\n",
+    ("      .RESET_ADDR(RESET_ADDR),\n      .HART_ID   (HART_ID),\n      .EXT_TIME  (EXT_TIME)\n",
      "      .RESET_ADDR (RESET_ADDR),\n      .RESET_ADDR1(RESET_ADDR1),\n      .HART_ID    (HART_ID)\n"),
     ("  ) datapath_unit_I (\n      .clk            (clk),\n      .resetn         (resetn),\n",
      "  ) datapath_unit_I (\n      .clk            (clk),\n      .resetn         (resetn),\n"
@@ -373,7 +379,7 @@ out += edit(K + "main_fsm.v", FSM)
 out += edit(K + "control_unit.v", CONTROL)
 out += edit(K + "csr_exception_handler.v", CSR)
 out += edit(K + "datapath_unit.v", DATAPATH,
-            [("  csr_exception_handler #(\n      .HART_ID(HART_ID)\n  ) csr_exception_handler_I (", "endmodule\n", CSRS)])
+            [("  csr_exception_handler #(\n      .HART_ID (HART_ID),\n      .EXT_TIME(EXT_TIME)\n  ) csr_exception_handler_I (", "endmodule\n", CSRS)])
 out += edit(K + "kianv_harris_mc_edition.v", TOP, [("  sv32 #(\n", "endmodule\n", MMU)])
 out += edit("amp_ctl.v", AMP)
 out += edit("soc.v", SOC,

@@ -18,9 +18,11 @@ expect keep ok 00000078
 expect apart ok 00000079
 expect ipi ok 00010001
 expect tick ok 00000001
+expect time ok
 expect nap ok
 expect wake ok
 expect poll ok 00000000
 expect stop ok 00000000
 expect again ok 00000101
+expect time again ok
 expect done
