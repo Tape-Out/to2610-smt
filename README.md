@@ -1,6 +1,6 @@
 # to2610-smt
 
-A hyper-threaded chip for the ECOS 2610 shuttle: one KianV core, two hardware threads. The core keeps a single state machine, datapath and memory port, and one copy of the architectural state per thread. Software sees the two harts of [`to2610-smp`](https://github.com/Tape-Out/to2610-smp), and the tests of that chip run here unchanged.
+A hyper-threaded chip for the ECOS 2610 shuttle: one KianV core, two hardware threads. The core keeps a single state machine, datapath and memory port, and one copy of the architectural state per thread. Software sees the two harts of [`to2610-smp`](https://github.com/Tape-Out/to2610-smp), and that chip's two-hart Linux image boots here unchanged.
 
 ![maturity](https://img.shields.io/badge/maturity-simulated-yellow) ![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0%20OR%20MulanPSL--2.0-blue)
 
